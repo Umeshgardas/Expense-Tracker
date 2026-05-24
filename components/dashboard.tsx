@@ -26,13 +26,8 @@ export function Dashboard() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
-  // Track editable monthly base incomes
-  const [monthlyIncomes, setMonthlyIncomes] = useState<Record<number, number>>(() => {
-    return Array.from({ length: 12 }, (_, i) => i + 1).reduce((acc, m) => {
-      acc[m] = 20000; // Default state
-      return acc;
-    }, {} as Record<number, number>);
-  });
+  // Core base incomes overriden by the user explicitly
+  const [monthlyIncomes, setMonthlyIncomes] = useState<Record<number, number>>({});
   const [editingIncomeMonth, setEditingIncomeMonth] = useState<number | null>(null);
   const [tempIncomeValue, setTempIncomeValue] = useState('');
 
@@ -198,8 +193,21 @@ export function Dashboard() {
     return new Date(year, month, 0).getDate();
   };
 
-  // ── YEAR-END GLOBAL METRICS CALCULATIONS ─────────────────────────
-  const yearlyTotalIncome = Object.values(monthlyIncomes).reduce((sum, val) => sum + val, 0);
+  // ── FORWARD-PROPAGATING TIMELINE BALANCE CALCULATOR ──────────────────
+  // We compute actual base income rules in a serial forward pass sequence.
+  // Defaults to 20000 baseline, carrying modifications down the timeline.
+  const resolvedMonthlyIncomes: Record<number, number> = {};
+  let currentActiveRunningSalaryBaseline = 20000;
+
+  for (let m = 1; m <= 12; m++) {
+    if (monthlyIncomes[m] !== undefined) {
+      currentActiveRunningSalaryBaseline = monthlyIncomes[m];
+    }
+    resolvedMonthlyIncomes[m] = currentActiveRunningSalaryBaseline;
+  }
+
+  // Calculate year-end global aggregates based on the resolved dynamic timeline array
+  const yearlyTotalIncome = Object.values(resolvedMonthlyIncomes).reduce((sum, val) => sum + val, 0);
   const yearlyTotalSpend = expenses.reduce((sum, item) => sum + (item.price || 0), 0);
   const yearlyTotalSavings = yearlyTotalIncome - yearlyTotalSpend;
 
@@ -272,7 +280,8 @@ export function Dashboard() {
                   const daysInMonth = getDaysInMonth(selectedYear, m.value);
                   const isMonthOpen = !!openMonths[m.value];
                   
-                  const baseIncome = monthlyIncomes[m.value] ?? 20000;
+                  // Extract the forward-propagated budget calculation line for this specific index month
+                  const baseIncome = resolvedMonthlyIncomes[m.value];
                   const totalMonthValue = monthExpenses.reduce((sum, item) => sum + (item.price || 0), 0);
                   const remainingMonthValue = baseIncome - totalMonthValue;
 
@@ -295,9 +304,10 @@ export function Dashboard() {
                         </button>
 
                         <div className="flex items-center gap-3 text-xs">
+                          {/* Inline Editable Income Field Container */}
                           {editingIncomeMonth === m.value ? (
                             <div className="flex items-center gap-1 bg-background border rounded px-1 py-0.5">
-                              <span className="text-muted-foreground font-mono">$</span>
+                              <span className="text-muted-foreground font-mono">₹</span>
                               <input
                                 type="number"
                                 value={tempIncomeValue}
@@ -319,9 +329,13 @@ export function Dashboard() {
                                 setTempIncomeValue(baseIncome.toString());
                               }}
                               className="flex items-center gap-1 cursor-pointer bg-background hover:bg-muted/80 border px-2 py-1 rounded group transition-colors"
+                              title="Click to edit baseline change from this month forward"
                             >
                               <span className="text-muted-foreground font-mono">Income:</span>
-                              <span className="font-semibold text-emerald-600 font-mono">${baseIncome}</span>
+                              <span className="font-semibold text-emerald-600 font-mono">
+                                ₹{baseIncome}
+                                {monthlyIncomes[m.value] !== undefined && <span className="text-[9px] text-primary ml-1">(Set)</span>}
+                              </span>
                               <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                             </div>
                           )}
@@ -329,7 +343,7 @@ export function Dashboard() {
                           <div className="flex items-center gap-1 bg-background border px-2 py-1 rounded">
                             <span className="text-muted-foreground">Remaining:</span>
                             <span className={`font-bold font-mono ${remainingMonthValue >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                              ${remainingMonthValue.toFixed(2)}
+                              ₹{remainingMonthValue.toFixed(2)}
                             </span>
                           </div>
                         </div>
@@ -370,13 +384,13 @@ export function Dashboard() {
                                   <div className="flex items-center gap-3">
                                     {totalDayValue > 0 && (
                                       <span className="font-medium text-rose-500 font-mono">
-                                        -${totalDayValue.toFixed(2)}
+                                        -₹{totalDayValue.toFixed(2)}
                                       </span>
                                     )}
                                     <div className="text-[11px] font-mono border-l pl-2 flex gap-1">
                                       <span className="text-muted-foreground">Bal:</span>
                                       <span className={currentDayRemaining >= 0 ? 'text-emerald-600 font-semibold' : 'text-rose-600 font-semibold'}>
-                                        ${currentDayRemaining.toFixed(2)}
+                                        ₹{currentDayRemaining.toFixed(2)}
                                       </span>
                                     </div>
                                     <span className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
@@ -411,14 +425,17 @@ export function Dashboard() {
                                           className="flex-1 text-xs bg-transparent border-b focus:outline-none focus:border-primary p-1"
                                           required
                                         />
-                                        <input
-                                          type="number"
-                                          placeholder="Price"
-                                          value={inlinePrice}
-                                          onChange={(e) => setInlinePrice(e.target.value)}
-                                          className="w-20 text-xs bg-transparent border-b focus:outline-none focus:border-primary p-1"
-                                          required
-                                        />
+                                        <div className="flex items-center gap-1 border-b focus-within:border-primary">
+                                          <span className="text-xs text-muted-foreground font-mono">₹</span>
+                                          <input
+                                            type="number"
+                                            placeholder="Price"
+                                            value={inlinePrice}
+                                            onChange={(e) => setInlinePrice(e.target.value)}
+                                            className="w-16 text-xs bg-transparent focus:outline-none p-1"
+                                            required
+                                          />
+                                        </div>
                                         <Button type="submit" size="sm" className="h-7 text-xs px-2">
                                           Save
                                         </Button>
@@ -455,7 +472,7 @@ export function Dashboard() {
                   );
                 })}
 
-                {/* ── GLOBAL YEARLY METRICS FOOTER CARD ───────────────────────── */}
+                {/* GLOBAL YEARLY METRICS FOOTER CARD */}
                 <div className="mt-6 border-2 border-primary/20 rounded-xl bg-card p-5 shadow-md overflow-hidden relative">
                   <div className="absolute top-0 right-0 p-3 opacity-5 pointer-events-none">
                     <CalendarDays className="h-24 w-24 text-primary" />
@@ -469,7 +486,7 @@ export function Dashboard() {
                     <div className="bg-muted/30 p-3 rounded-lg border">
                       <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Total Income Allocations</p>
                       <p className="text-xl font-bold font-mono text-emerald-600 mt-1">
-                        ${yearlyTotalIncome.toFixed(2)}
+                        ₹{yearlyTotalIncome.toFixed(2)}
                       </p>
                     </div>
 
@@ -479,7 +496,7 @@ export function Dashboard() {
                           <TrendingDown className="h-3 w-3 text-rose-500" /> Total Annual Outflow
                         </p>
                         <p className="text-xl font-bold font-mono text-rose-500 mt-1">
-                          -${yearlyTotalSpend.toFixed(2)}
+                          -₹{yearlyTotalSpend.toFixed(2)}
                         </p>
                       </div>
                     </div>
@@ -490,7 +507,7 @@ export function Dashboard() {
                           <PiggyBank className="h-3 w-3 text-cyan-600" /> Total Net Accumulations
                         </p>
                         <p className={`text-xl font-bold font-mono mt-1 ${yearlyTotalSavings >= 0 ? 'text-cyan-600' : 'text-rose-600'}`}>
-                          ${yearlyTotalSavings.toFixed(2)}
+                          ₹{yearlyTotalSavings.toFixed(2)}
                         </p>
                       </div>
                     </div>
