@@ -14,19 +14,18 @@ export const metadata: Metadata = {
   icons: {
     icon: [
       {
-        url: '/icon-light-32x32.png',
+        // Light Mode Tab Icon (Dark Blue Circle with White Rupee Text)
+        url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="%230f172a"/><text x="16" y="22" font-family="sans-serif" font-weight="bold" font-size="16" fill="%23ffffff" text-anchor="middle">₹</text></svg>',
         media: '(prefers-color-scheme: light)',
       },
       {
-        url: '/icon-dark-32x32.png',
+        // Dark Mode Tab Icon (Bright Emerald Circle with White Rupee Text)
+        url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="%2310b981"/><text x="16" y="22" font-family="sans-serif" font-weight="bold" font-size="16" fill="%23ffffff" text-anchor="middle">₹</text></svg>',
         media: '(prefers-color-scheme: dark)',
       },
-      {
-        url: '/icon.svg',
-        type: 'image/svg+xml',
-      },
     ],
-    apple: '/apple-icon.png',
+    // Fallback standard icon rule
+    apple: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="%2310b981"/><text x="16" y="22" font-family="sans-serif" font-weight="bold" font-size="16" fill="%23ffffff" text-anchor="middle">₹</text></svg>',
   },
 }
 
@@ -35,7 +34,6 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode
 }>) {
-  
   return (
     <html lang="en" className="bg-background">
       <body className="font-sans antialiased">
