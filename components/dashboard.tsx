@@ -26,7 +26,7 @@ export function Dashboard() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
-  // Core base incomes overriden by the user explicitly
+  // Core base incomes overridden by the user explicitly
   const [monthlyIncomes, setMonthlyIncomes] = useState<Record<number, number>>({});
   const [editingIncomeMonth, setEditingIncomeMonth] = useState<number | null>(null);
   const [tempIncomeValue, setTempIncomeValue] = useState('');
@@ -45,24 +45,42 @@ export function Dashboard() {
   const monthRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const dayRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
+  // Get current real-world dates for timeline gating
+  const today = new Date();
+  const currentRealYear = today.getFullYear();
+  const currentRealMonth = today.getMonth() + 1;
+
+  // Unified loader block for expenses and income baselines
   useEffect(() => {
-    fetchExpenses();
+    const loadDashboardData = async () => {
+      try {
+        setIsLoading(true);
+        await Promise.all([
+          fetchExpenses(),
+          fetchMonthlyIncomes()
+        ]);
+      } catch (error) {
+        console.error('Error synchronizing dashboard metrics:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadDashboardData();
   }, [selectedYear]);
 
   // Expand and scroll directly to the current Month and Day layout row
   useEffect(() => {
     if (!isLoading && expenses.length >= 0) {
-      const currentNativeDate = new Date();
-      const nativeYear = currentNativeDate.getFullYear();
-      const nativeMonth = currentNativeDate.getMonth() + 1;
-      const nativeDay = currentNativeDate.getDate();
+      const nativeMonth = today.getMonth() + 1;
+      const nativeDay = today.getDate();
       const targetDayKey = `${nativeMonth}-${nativeDay}`;
 
-      if (selectedYear === nativeYear) {
+      if (selectedYear === currentRealYear) {
         setOpenMonths(prev => ({ ...prev, [nativeMonth]: true }));
         setOpenDays(prev => ({ ...prev, [targetDayKey]: true }));
         
-        setTimeout(() => {
+        const scrollTimeout = setTimeout(() => {
           const targetDayElement = dayRefs.current[targetDayKey];
           if (targetDayElement) {
             targetDayElement.scrollIntoView({
@@ -76,13 +94,14 @@ export function Dashboard() {
             });
           }
         }, 300);
+
+        return () => clearTimeout(scrollTimeout);
       }
     }
   }, [isLoading, selectedYear, expenses]);
 
   const fetchExpenses = async () => {
     try {
-      setIsLoading(true);
       const response = await fetch(`/api/expenses?year=${selectedYear}`);
       if (response.ok) {
         const data = await response.json();
@@ -90,8 +109,18 @@ export function Dashboard() {
       }
     } catch (error) {
       console.error('Failed to fetch expenses:', error);
-    } finally {
-      setIsLoading(false);
+    }
+  };
+
+  const fetchMonthlyIncomes = async () => {
+    try {
+      const response = await fetch(`/api/income?year=${selectedYear}`);
+      if (response.ok) {
+        const data = await response.json();
+        setMonthlyIncomes(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch monthly custom incomes:', error);
     }
   };
 
@@ -157,12 +186,33 @@ export function Dashboard() {
     await fetchExpenses();
   };
 
-  const handleSaveIncome = (month: number) => {
+  const handleSaveIncome = async (month: number) => {
     const parsed = parseFloat(tempIncomeValue);
-    if (!isNaN(parsed)) {
+    if (isNaN(parsed)) return;
+
+    const previousIncomes = { ...monthlyIncomes };
+
+    try {
       setMonthlyIncomes(prev => ({ ...prev, [month]: parsed }));
+      setEditingIncomeMonth(null);
+
+      const response = await fetch('/api/income', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          year: selectedYear,
+          month: month,
+          amount: parsed,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save income adjustments');
+      }
+    } catch (error) {
+      console.error('Database sync failure, rolling back state:', error);
+      setMonthlyIncomes(previousIncomes);
     }
-    setEditingIncomeMonth(null);
   };
 
   const handleLogout = async () => {
@@ -171,6 +221,10 @@ export function Dashboard() {
   };
 
   const toggleMonth = (month: number) => {
+    // Prevent expanding future months entirely
+    const isFutureMonth = selectedYear > currentRealYear || (selectedYear === currentRealYear && month > currentRealMonth);
+    if (isFutureMonth) return;
+
     setOpenMonths(prev => ({ ...prev, [month]: !prev[month] }));
   };
 
@@ -194,8 +248,6 @@ export function Dashboard() {
   };
 
   // ── FORWARD-PROPAGATING TIMELINE BALANCE CALCULATOR ──────────────────
-  // We compute actual base income rules in a serial forward pass sequence.
-  // Defaults to 20000 baseline, carrying modifications down the timeline.
   const resolvedMonthlyIncomes: Record<number, number> = {};
   let currentActiveRunningSalaryBaseline = 20000;
 
@@ -206,9 +258,18 @@ export function Dashboard() {
     resolvedMonthlyIncomes[m] = currentActiveRunningSalaryBaseline;
   }
 
-  // Calculate year-end global aggregates based on the resolved dynamic timeline array
-  const yearlyTotalIncome = Object.values(resolvedMonthlyIncomes).reduce((sum, val) => sum + val, 0);
-  const yearlyTotalSpend = expenses.reduce((sum, item) => sum + (item.price || 0), 0);
+  // Calculate global metrics considering only current/past tracking visibility bounds
+  const yearlyTotalIncome = Object.entries(resolvedMonthlyIncomes).reduce((sum, [monthStr, val]) => {
+    const mNum = parseInt(monthStr);
+    const isFuture = selectedYear > currentRealYear || (selectedYear === currentRealYear && mNum > currentRealMonth);
+    return isFuture ? sum : sum + val;
+  }, 0);
+
+  const yearlyTotalSpend = expenses.reduce((sum, item) => {
+    const isFuture = item.year > currentRealYear || (item.year === currentRealYear && item.month > currentRealMonth);
+    return isFuture ? sum : sum + (item.price || 0);
+  }, 0);
+
   const yearlyTotalSavings = yearlyTotalIncome - yearlyTotalSpend;
 
   return (
@@ -276,11 +337,13 @@ export function Dashboard() {
             ) : (
               <div className="space-y-3">
                 {months.map((m) => {
+                  // Figure out if this iteration block represents a future timeline segment
+                  const isFutureMonth = selectedYear > currentRealYear || (selectedYear === currentRealYear && m.value > currentRealMonth);
+
                   const monthExpenses = expenses.filter(e => e.month === m.value);
                   const daysInMonth = getDaysInMonth(selectedYear, m.value);
-                  const isMonthOpen = !!openMonths[m.value];
+                  const isMonthOpen = !isFutureMonth && !!openMonths[m.value];
                   
-                  // Extract the forward-propagated budget calculation line for this specific index month
                   const baseIncome = resolvedMonthlyIncomes[m.value];
                   const totalMonthValue = monthExpenses.reduce((sum, item) => sum + (item.price || 0), 0);
                   const remainingMonthValue = baseIncome - totalMonthValue;
@@ -291,66 +354,78 @@ export function Dashboard() {
                     <div 
                       key={m.value} 
                       ref={(el) => { monthRefs.current[m.value] = el; }}
-                      className="border rounded-lg bg-card overflow-hidden scroll-mt-24 shadow-sm"
+                      className={`border rounded-lg bg-card overflow-hidden scroll-mt-24 shadow-sm transition-opacity ${
+                        isFutureMonth ? 'opacity-50 select-none' : ''
+                      }`}
                     >
                       {/* Month Trigger Bar */}
                       <div className="w-full px-4 py-3 flex flex-wrap items-center justify-between bg-muted/40 border-b gap-2">
                         <button
                           onClick={() => toggleMonth(m.value)}
-                          className="flex items-center gap-2 text-left font-medium flex-1 min-w-[120px]"
+                          disabled={isFutureMonth}
+                          className={`flex items-center gap-2 text-left font-medium flex-1 min-w-[120px] ${
+                            isFutureMonth ? 'cursor-not-allowed' : ''
+                          }`}
                         >
-                          {isMonthOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                          {!isFutureMonth && (isMonthOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />)}
                           {m.name}
                         </button>
 
-                        <div className="flex items-center gap-3 text-xs">
-                          {/* Inline Editable Income Field Container */}
-                          {editingIncomeMonth === m.value ? (
-                            <div className="flex items-center gap-1 bg-background border rounded px-1 py-0.5">
-                              <span className="text-muted-foreground font-mono">₹</span>
-                              <input
-                                type="number"
-                                value={tempIncomeValue}
-                                onChange={(e) => setTempIncomeValue(e.target.value)}
-                                className="w-16 bg-transparent outline-none font-mono font-semibold text-emerald-600"
-                                autoFocus
-                              />
-                              <button 
-                                onClick={() => handleSaveIncome(m.value)} 
-                                className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.5 rounded hover:bg-emerald-700"
+                        {/* Hide numerical data context on future milestones */}
+                        {!isFutureMonth && (
+                          <div className="flex items-center gap-3 text-xs">
+                            {/* Inline Editable Income Field Container */}
+                            {editingIncomeMonth === m.value ? (
+                              <div className="flex items-center gap-1 bg-background border rounded px-1 py-0.5">
+                                <span className="text-muted-foreground font-mono">₹</span>
+                                <input
+                                  type="number"
+                                  value={tempIncomeValue}
+                                  onChange={(e) => setTempIncomeValue(e.target.value)}
+                                  className="w-16 bg-transparent outline-none font-mono font-semibold text-emerald-600"
+                                  autoFocus
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleSaveIncome(m.value);
+                                    if (e.key === 'Escape') setEditingIncomeMonth(null);
+                                  }}
+                                />
+                                <button 
+                                  onClick={() => handleSaveIncome(m.value)} 
+                                  className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.5 rounded hover:bg-emerald-700"
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            ) : (
+                              <div 
+                                onClick={() => {
+                                  setEditingIncomeMonth(m.value);
+                                  setTempIncomeValue(baseIncome.toString());
+                                }}
+                                className="flex items-center gap-1 cursor-pointer bg-background hover:bg-muted/80 border px-2 py-1 rounded group transition-colors"
+                                title="Click to edit baseline change from this month forward"
                               >
-                                Save
-                              </button>
-                            </div>
-                          ) : (
-                            <div 
-                              onClick={() => {
-                                setEditingIncomeMonth(m.value);
-                                setTempIncomeValue(baseIncome.toString());
-                              }}
-                              className="flex items-center gap-1 cursor-pointer bg-background hover:bg-muted/80 border px-2 py-1 rounded group transition-colors"
-                              title="Click to edit baseline change from this month forward"
-                            >
-                              <span className="text-muted-foreground font-mono">Income:</span>
-                              <span className="font-semibold text-emerald-600 font-mono">
-                                ₹{baseIncome}
-                                {monthlyIncomes[m.value] !== undefined && <span className="text-[9px] text-primary ml-1">(Set)</span>}
-                              </span>
-                              <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                            </div>
-                          )}
+                                <span className="text-muted-foreground font-mono">Income:</span>
+                                <span className="font-semibold text-emerald-600 font-mono">
+                                  ₹{baseIncome}
+                                  {monthlyIncomes[m.value] !== undefined && <span className="text-[9px] text-primary ml-1">(Set)</span>}
+                                </span>
+                                <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                              </div>
+                            )}
 
-                          <div className="flex items-center gap-1 bg-background border px-2 py-1 rounded">
-                            <span className="text-muted-foreground">Remaining:</span>
-                            <span className={`font-bold font-mono ${remainingMonthValue >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                              ₹{remainingMonthValue.toFixed(2)}
-                            </span>
+                            <div className="flex items-center gap-1 bg-background border px-2 py-1 rounded">
+                              <span className="text-muted-foreground">Remaining:</span>
+                              <span className={`font-bold font-mono ${remainingMonthValue >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                ₹{remainingMonthValue.toFixed(2)}
+                              </span>
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
 
                       {/* Month Content Block */}
-                      {isMonthOpen && (
+                      {!isFutureMonth && isMonthOpen && (
                         <div className="p-2 bg-background space-y-2">
                           {Array.from({ length: daysInMonth }, (_, index) => {
                             const day = index + 1;
